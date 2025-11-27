@@ -7,11 +7,12 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.authtoken.models import Token
 from .models import Almacen, ProductosVendidos
+from datetime import date
 
 User = get_user_model()
 
 
-# ========== PERMISOS PERSONALIZADOS ==========
+# ========== PERMISOS ==========
 class IsAdmin:
     def has_permission(self, request, view):
         return request.user.is_authenticated and request.user.rol == 'admin'
@@ -29,7 +30,6 @@ class IsUsuarioOrAlmaceneroOrAdmin:
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def login_view(request):
-    """Login público"""
     username = request.data.get('username')
     password = request.data.get('password')
 
@@ -43,8 +43,7 @@ def login_view(request):
     if not user.is_active:
         return Response({'error': 'Usuario desactivado'}, status=status.HTTP_403_FORBIDDEN)
 
-    # ✅ get_or_create: evita duplicados
-    token, created = Token.objects.get_or_create(user=user)
+    token, _ = Token.objects.get_or_create(user=user)
     return Response({
         'token': token.key,
         'username': user.username,
@@ -56,43 +55,30 @@ def login_view(request):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def register_user(request):
-    """Registro público (rol='usuario' por defecto)"""
     username = request.data.get('username')
     email = request.data.get('email')
     password = request.data.get('password')
 
     if not username or not email or not password:
-        return Response(
-            {'error': 'Faltan campos requeridos: username, email, password'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({'error': 'Faltan campos requeridos: username, email, password'}, status=status.HTTP_400_BAD_REQUEST)
 
     if User.objects.filter(username=username).exists():
-        return Response(
-            {'error': 'Nombre de usuario ya existe'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({'error': 'Nombre de usuario ya existe'}, status=status.HTTP_400_BAD_REQUEST)
 
     if User.objects.filter(email=email).exists():
-        return Response(
-            {'error': 'Email ya registrado'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+        return Response({'error': 'Email ya registrado'}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
-        # ✅ Crear usuario
         user = User.objects.create_user(
             username=username,
             email=email,
             password=password,
-            rol='usuario'  # ← por defecto, no se acepta desde frontend
+            rol='usuario'
         )
         user.is_active = True
         user.save()
 
-        # ✅ get_or_create: evita "duplicate key"
-        token, created = Token.objects.get_or_create(user=user)
-
+        token, _ = Token.objects.get_or_create(user=user)
         return Response({
             'token': token.key,
             'username': user.username,
@@ -101,159 +87,234 @@ def register_user(request):
         }, status=status.HTTP_201_CREATED)
 
     except Exception as e:
-        # ✅ Limpiar usuario si falla
         if 'user' in locals():
             user.delete()
-        return Response(
-            {'error': str(e)},
-            status=status.HTTP_400_BAD_REQUEST
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['POST'])
+@permission_classes([IsAdmin])
+def register_staff(request):
+    username = request.data.get('username')
+    email = request.data.get('email')
+    password = request.data.get('password')
+    rol = request.data.get('rol')
+
+    if not username or not email or not password or not rol:
+        return Response({'error': 'Faltan campos requeridos'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if rol not in ['admin', 'almacenero']:
+        return Response({'error': 'Rol inválido. Solo se permiten: admin, almacenero'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if User.objects.filter(username=username).exists():
+        return Response({'error': 'Nombre de usuario ya existe'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if User.objects.filter(email=email).exists():
+        return Response({'error': 'Email ya registrado'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        user = User.objects.create_user(
+            username=username,
+            email=email,
+            password=password,
+            rol=rol
         )
+        user.is_active = True
+        user.save()
+
+        return Response({
+            'id': user.id,
+            'username': user.username,
+            'email': user.email,
+            'rol': user.rol,
+            'is_active': user.is_active
+        }, status=status.HTTP_201_CREATED)
+
+    except Exception as e:
+        if 'user' in locals():
+            user.delete()
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
-# ========== ALMACEN ==========
+# ========== ALMACÉN ==========
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def listar_productos(request):
-    """Listar productos (todos los roles)"""
     productos = Almacen.objects.all()
-    data = [{
-        'id': p.id,
-        'nombre': p.nombre,
-        'tipo': p.tipo,
-        'precio_unitario': str(p.precio_unitario),
-        'stock': p.stock,
-        'fecha_vencimiento': p.fecha_vencimiento.isoformat() if p.fecha_vencimiento else None,
-        'imagen': p.imagen or ''
-    } for p in productos]
+    data = []
+    for p in productos:
+        item = {
+            'id': p.id,
+            'nombreproducto': p.nombreproducto,
+            'tipoproducto': p.tipoproducto,
+            'categoria': p.categoria,
+            'fechavencimiento': p.fechavencimiento.isoformat() if p.fechavencimiento else None,
+            'precio': float(p.precio) if p.precio else 0.0,
+            'stock': p.stock
+        }
+        # ✅ Imagen segura
+        if p.imagen:
+            item['imagen'] = p.imagen.url
+        else:
+            item['imagen'] = None
+        data.append(item)
     return Response(data)
 
 
 @api_view(['POST'])
 @permission_classes([IsAlmaceneroOrAdmin])
 def crear_producto(request):
-    """Crear producto (almacenero o admin)"""
-    print("✅ Datos recibidos:", request.data)
-    print("✅ Tipos:", {k: type(v).__name__ for k, v in request.data.items()})
     try:
-        data = request.data
+        nombreproducto = request.POST.get('nombreproducto')
+        tipoproducto = request.POST.get('tipoproducto')
+        categoria = request.POST.get('categoria')
+        fechavencimiento_str = request.POST.get('fechavencimiento')
+        stock = request.POST.get('stock')
+        imagen = request.FILES.get('imagen')
+
+        if not all([nombreproducto, tipoproducto, categoria, fechavencimiento_str, stock]):
+            return Response({'error': 'Faltan campos requeridos'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # ✅ Convertir string a objeto date
+        try:
+            fechavencimiento = date.fromisoformat(fechavencimiento_str)
+        except (TypeError, ValueError):
+            return Response({'error': 'Formato de fecha inválido. Use YYYY-MM-DD'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # ✅ Crear producto
         producto = Almacen.objects.create(
-            nombre=data['nombre'],
-            tipo=data['tipo'],
-            precio_unitario=data['precio_unitario'],
-            stock=data.get('stock', 0),
-            fecha_vencimiento=data.get('fecha_vencimiento') or None,
-            imagen=data.get('imagen', '')
+            nombreproducto=nombreproducto,
+            tipoproducto=tipoproducto,
+            categoria=categoria,
+            fechavencimiento=fechavencimiento,
+            precio=0.00,  # ← el admin lo actualizará después
+            stock=int(stock)
         )
+
+        # ✅ Guardar imagen si existe
+        if imagen:
+            producto.imagen = imagen
+            producto.save()
+
+        # ✅ Respuesta segura
         return Response({
             'id': producto.id,
-            'nombre': producto.nombre,
-            'tipo': producto.tipo,
-            'precio_unitario': str(producto.precio_unitario),
-            'stock': producto.stock,
-            'fecha_vencimiento': producto.fecha_vencimiento.isoformat() if producto.fecha_vencimiento else None,
-            'imagen': producto.imagen
+            'nombreproducto': producto.nombreproducto,
+            'tipoproducto': producto.tipoproducto,
+            'categoria': producto.categoria,
+            'fechavencimiento': producto.fechavencimiento.isoformat(),
+            'imagen': producto.imagen.url if producto.imagen else None,
+            'precio': float(producto.precio),
+            'stock': producto.stock
         }, status=status.HTTP_201_CREATED)
-    except KeyError as e:
-        return Response({'error': f'Campo requerido faltante: {e}'}, status=status.HTTP_400_BAD_REQUEST)
+
     except Exception as e:
+        print("❌ Error en crear_producto:", str(e))
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(['PUT'])
 @permission_classes([IsAlmaceneroOrAdmin])
 def actualizar_producto(request, pk):
-    """Actualizar producto completo"""
     try:
         producto = Almacen.objects.get(pk=pk)
-    except Almacen.DoesNotExist:
-        return Response({'error': 'Producto no encontrado'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # ✅ Solo actualizar campos permitidos
+        nombreproducto = request.POST.get('nombreproducto')
+        tipoproducto = request.POST.get('tipoproducto')
+        categoria = request.POST.get('categoria')
+        fechavencimiento_str = request.POST.get('fechavencimiento')
+        stock = request.POST.get('stock')
+        imagen = request.FILES.get('imagen')
 
-    data = request.data
-    try:
-        producto.nombre = data.get('nombre', producto.nombre)
-        producto.tipo = data.get('tipo', producto.tipo)
-        producto.precio_unitario = data.get('precio_unitario', producto.precio_unitario)
-        producto.stock = data.get('stock', producto.stock)
-        producto.fecha_vencimiento = data.get('fecha_vencimiento') or producto.fecha_vencimiento
-        producto.imagen = data.get('imagen', producto.imagen)
+        if nombreproducto:
+            producto.nombreproducto = nombreproducto
+        if tipoproducto:
+            producto.tipoproducto = tipoproducto
+        if categoria:
+            producto.categoria = categoria
+        if stock:
+            producto.stock = int(stock)
+        
+        # ✅ Manejar fecha correctamente
+        if fechavencimiento_str:
+            try:
+                producto.fechavencimiento = date.fromisoformat(fechavencimiento_str)
+            except (TypeError, ValueError):
+                return Response({'error': 'Formato de fecha inválido'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # ✅ Guardar imagen si existe
+        if imagen:
+            producto.imagen = imagen
+
         producto.save()
 
         return Response({
             'id': producto.id,
-            'nombre': producto.nombre,
-            'tipo': producto.tipo,
-            'precio_unitario': str(producto.precio_unitario),
-            'stock': producto.stock,
-            'fecha_vencimiento': producto.fecha_vencimiento.isoformat() if producto.fecha_vencimiento else None,
-            'imagen': producto.imagen
+            'nombreproducto': producto.nombreproducto,
+            'tipoproducto': producto.tipoproducto,
+            'categoria': producto.categoria,
+            'fechavencimiento': producto.fechavencimiento.isoformat() if producto.fechavencimiento else None,
+            'imagen': producto.imagen.url if producto.imagen else None,
+            'precio': float(producto.precio),
+            'stock': producto.stock
         })
+
+    except Almacen.DoesNotExist:
+        return Response({'error': 'Producto no encontrado'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
+        print("❌ Error en actualizar_producto:", str(e))
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(['PATCH'])
 @permission_classes([IsAlmaceneroOrAdmin])
 def actualizar_stock(request, pk):
-    """Actualizar solo stock"""
     try:
         producto = Almacen.objects.get(pk=pk)
+        stock = request.data.get('stock')
+        if stock is None:
+            return Response({'error': 'Campo "stock" requerido'}, status=status.HTTP_400_BAD_REQUEST)
+        producto.stock = int(stock)
+        producto.save()
+        return Response({
+            'id': producto.id,
+            'nombreproducto': producto.nombreproducto,
+            'stock': producto.stock
+        })
     except Almacen.DoesNotExist:
         return Response({'error': 'Producto no encontrado'}, status=status.HTTP_404_NOT_FOUND)
-
-    stock = request.data.get('stock')
-    if stock is None:
-        return Response({'error': 'Campo "stock" requerido'}, status=status.HTTP_400_BAD_REQUEST)
-
-    try:
-        stock = int(stock)
-        if stock < 0:
-            raise ValueError
-    except:
-        return Response({'error': 'Stock debe ser entero ≥ 0'}, status=status.HTTP_400_BAD_REQUEST)
-
-    producto.stock = stock
-    producto.save()
-    return Response({
-        'id': producto.id,
-        'nombre': producto.nombre,
-        'stock': producto.stock
-    })
+    except Exception as e:
+        print("❌ Error en actualizar_stock:", str(e))
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(['PATCH'])
 @permission_classes([IsAdmin])
 def actualizar_precio(request, pk):
-    """Actualizar solo precio (solo admin)"""
     try:
         producto = Almacen.objects.get(pk=pk)
+        precio = request.data.get('precio')
+        if precio is None:
+            return Response({'error': 'Campo "precio" requerido'}, status=status.HTTP_400_BAD_REQUEST)
+        producto.precio = float(precio)
+        producto.save()
+        return Response({
+            'id': producto.id,
+            'nombreproducto': producto.nombreproducto,
+            'precio': float(producto.precio)
+        })
     except Almacen.DoesNotExist:
         return Response({'error': 'Producto no encontrado'}, status=status.HTTP_404_NOT_FOUND)
-
-    precio = request.data.get('precio_unitario')
-    if precio is None:
-        return Response({'error': 'Campo "precio_unitario" requerido'}, status=status.HTTP_400_BAD_REQUEST)
-
-    try:
-        precio = float(precio)
-        if precio <= 0:
-            raise ValueError
-    except:
-        return Response({'error': 'Precio debe ser número > 0'}, status=status.HTTP_400_BAD_REQUEST)
-
-    producto.precio_unitario = precio
-    producto.save()
-    return Response({
-        'id': producto.id,
-        'nombre': producto.nombre,
-        'precio_unitario': str(producto.precio_unitario)
-    })
+    except Exception as e:
+        print("❌ Error en actualizar_precio:", str(e))
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 # ========== VENTAS ==========
 @api_view(['POST'])
 @permission_classes([IsUsuarioOrAlmaceneroOrAdmin])
 def crear_venta(request):
-    """Registrar venta"""
     try:
         data = request.data
         ventas = data.get('ventas', [])
@@ -275,12 +336,12 @@ def crear_venta(request):
 
             if producto.stock < cantidad:
                 return Response({
-                    'error': f'Stock insuficiente para {producto.nombre}',
+                    'error': f'Stock insuficiente para {producto.nombreproducto}',
                     'disponible': producto.stock,
                     'solicitado': cantidad
                 }, status=status.HTTP_400_BAD_REQUEST)
 
-            subtotal = float(producto.precio_unitario) * cantidad
+            subtotal = float(producto.precio) * cantidad
             total_venta += subtotal
 
             # Crear registro
@@ -293,7 +354,7 @@ def crear_venta(request):
             )
             detalles.append({
                 'id': venta.id,
-                'producto': producto.nombre,
+                'producto': producto.nombreproducto,
                 'cantidad': cantidad,
                 'subtotal': subtotal
             })
@@ -309,13 +370,13 @@ def crear_venta(request):
         }, status=status.HTTP_201_CREATED)
 
     except Exception as e:
+        print("❌ Error en crear_venta:", str(e))
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def listar_ventas(request):
-    """Listar ventas"""
     ventas = ProductosVendidos.objects.select_related('usuario', 'producto')
     
     # Filtro por fecha (opcional)
@@ -326,9 +387,9 @@ def listar_ventas(request):
     data = [{
         'id': v.id,
         'usuario': v.usuario.username,
-        'producto_nombre': v.producto.nombre,
+        'producto_nombre': v.producto.nombreproducto,
         'cantidad': v.cantidad,
-        'precio_total': str(v.precio_total),
+        'precio_total': float(v.precio_total),
         'fecha': v.fecha.isoformat()
     } for v in ventas]
     return Response(data)
@@ -338,14 +399,13 @@ def listar_ventas(request):
 @api_view(['GET'])
 @permission_classes([IsAdmin])
 def listar_usuarios(request):
-    """Listar usuarios (solo admin)"""
     usuarios = User.objects.all()
     data = [{
         'id': u.id,
         'username': u.username,
+        'email': u.email,
         'rol': u.rol,
-        'is_active': u.is_active,
-        'is_staff': u.is_staff
+        'is_active': u.is_active
     } for u in usuarios]
     return Response(data)
 
@@ -353,14 +413,10 @@ def listar_usuarios(request):
 @api_view(['PUT'])
 @permission_classes([IsAdmin])
 def actualizar_usuario(request, pk):
-    """Actualizar usuario (solo admin)"""
     try:
         usuario = User.objects.get(pk=pk)
-    except User.DoesNotExist:
-        return Response({'error': 'Usuario no encontrado'}, status=status.HTTP_404_NOT_FOUND)
-
-    data = request.data
-    try:
+        data = request.data
+        
         if 'rol' in data:
             if data['rol'] not in ['admin', 'almacenero', 'usuario']:
                 return Response({'error': 'Rol inválido'}, status=status.HTTP_400_BAD_REQUEST)
@@ -373,69 +429,12 @@ def actualizar_usuario(request, pk):
         return Response({
             'id': usuario.id,
             'username': usuario.username,
+            'email': usuario.email,
             'rol': usuario.rol,
             'is_active': usuario.is_active
         })
+    except User.DoesNotExist:
+        return Response({'error': 'Usuario no encontrado'}, status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
+        print("❌ Error en actualizar_usuario:", str(e))
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-@api_view(['POST'])
-@permission_classes([IsAdmin])  # ← solo admin puede
-def register_staff(request):
-    """Registrar staff (admin o almacenero) - solo para administradores"""
-    username = request.data.get('username')
-    email = request.data.get('email')
-    password = request.data.get('password')
-    rol = request.data.get('rol')
-
-    if not username or not email or not password or not rol:
-        return Response(
-            {'error': 'Faltan campos requeridos: username, email, password, rol'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    if rol not in ['admin', 'almacenero']:
-        return Response(
-            {'error': 'Rol inválido. Solo se permiten: admin, almacenero'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    if User.objects.filter(username=username).exists():
-        return Response(
-            {'error': 'Nombre de usuario ya existe'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    if User.objects.filter(email=email).exists():
-        return Response(
-            {'error': 'Email ya registrado'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    try:
-        user = User.objects.create_user(
-            username=username,
-            email=email,
-            password=password,
-            rol=rol
-        )
-        user.is_active = True
-        user.save()
-
-        # ✅ Solo get_or_create (nada de create)
-        token, created = Token.objects.get_or_create(user=user)
-
-        return Response({
-            'id': user.id,
-            'username': user.username,
-            'email': user.email,
-            'rol': user.rol,
-            'is_active': user.is_active
-        }, status=status.HTTP_201_CREATED)
-
-    except Exception as e:
-        if 'user' in locals():
-            user.delete()
-        return Response(
-            {'error': str(e)},
-            status=status.HTTP_400_BAD_REQUEST
-        )
