@@ -268,7 +268,7 @@ def actualizar_producto(request, pk):
 
 
 @api_view(['PATCH'])
-@permission_classes([IsAlmaceneroOrAdmin])
+@permission_classes([IsAuthenticated])
 def actualizar_stock(request, pk):
     try:
         producto = Almacen.objects.get(pk=pk)
