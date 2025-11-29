@@ -346,11 +346,11 @@ def crear_venta(request):
 
             # Crear registro
             venta = ProductosVendidos.objects.create(
-                usuario=request.user,
-                producto=producto,
-                cantidad=cantidad,
-                precio_total=subtotal,
-                fecha=timezone.now()
+                nombreproducto=producto.nombreproducto,
+                tipoproducto=producto.tipoproducto,
+                categoria=producto.categoria,
+                precio_unitario=float(producto.precio),
+                cantidad=cantidad
             )
             detalles.append({
                 'id': venta.id,
@@ -375,23 +375,35 @@ def crear_venta(request):
 
 
 @api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def listar_ventas(request):
-    ventas = ProductosVendidos.objects.select_related('usuario', 'producto')
-    
-    # Filtro por fecha (opcional)
+@permission_classes([IsAdmin])
+def listar_ventas_detalle(request):
+    """Listar ventas con detalle de productos para reportes"""
     fecha = request.GET.get('fecha')
+    
+    # ✅ Consulta SIMPLE (tu modelo no tiene relaciones ForeignKey)
+    ventas = ProductosVendidos.objects.order_by('-fechaventa')
+    
     if fecha:
-        ventas = ventas.filter(fecha__date=fecha)
-
-    data = [{
-        'id': v.id,
-        'usuario': v.usuario.username,
-        'producto_nombre': v.producto.nombreproducto,
-        'cantidad': v.cantidad,
-        'precio_total': float(v.precio_total),
-        'fecha': v.fecha.isoformat()
-    } for v in ventas]
+        ventas = ventas.filter(fechaventa__date=fecha)
+    
+    data = []
+    for v in ventas:
+        # ✅ Cálculo del precio total (no existe como campo en tu modelo)
+        precio_total = float(v.precio_unitario) * v.cantidad
+        
+        data.append({
+            'id': v.id,
+            'producto': v.id,  # Usamos el ID como identificador
+            'producto_nombre': v.nombreproducto,
+            'categoria': v.categoria,
+            'tipoproducto': v.tipoproducto,
+            'cantidad': v.cantidad,
+            'precio_unitario': float(v.precio_unitario),
+            'precio_total': precio_total,  # Calculado dinámicamente
+            'fecha': v.fechaventa.isoformat(),
+            'usuario': 'Sistema'  # Valor por defecto (tu modelo no tiene usuario)
+        })
+    
     return Response(data)
 
 
