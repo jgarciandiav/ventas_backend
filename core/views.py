@@ -9,8 +9,17 @@ from rest_framework.authtoken.models import Token
 from .models import Almacen, ProductosVendidos
 from datetime import date
 
-User = get_user_model()
+from django.core.mail import send_mail
+from django.contrib.auth.tokens import PasswordResetTokenGenerator
+from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
+from django.utils.encoding import force_bytes, force_str
+from django.urls import reverse
+from django.conf import settings
+import logging
 
+
+User = get_user_model()
+logger = logging.getLogger(__name__)
 
 # ========== PERMISOS ==========
 class IsAdmin:
@@ -450,3 +459,96 @@ def actualizar_usuario(request, pk):
     except Exception as e:
         print("❌ Error en actualizar_usuario:", str(e))
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    
+# ✅ Generador de tokens personalizado
+class PasswordResetTokenGenerator(PasswordResetTokenGenerator):
+    def _make_hash_value(self, user, timestamp):
+        return str(user.pk) + str(timestamp) + str(user.is_active)
+
+password_reset_token = PasswordResetTokenGenerator()
+
+# ✅ Solicitar recuperación de contraseña
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def password_reset_request(request):
+    email = request.data.get('email')
+    
+    if not email:
+        return Response({'error': 'Email es requerido'}, status=400)
+    
+    try:
+        user = User.objects.get(email=email)
+        
+        # ✅ Generar token único
+        token = password_reset_token.make_token(user)
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        
+        # ✅ Construir URL de restablecimiento
+        reset_url = request.build_absolute_uri(
+            reverse('password_reset_confirm', kwargs={'uidb64': uid, 'token': token})
+        )
+        
+        # ✅ Enviar email
+        subject = 'Recuperación de contraseña - MultiTiendas'
+        message = f'''
+        Hola {user.username},
+
+        Has solicitado recuperar tu contraseña en MultiTiendas.
+
+        Haz clic en el siguiente enlace para crear una nueva contraseña:
+        {reset_url}
+
+        Este enlace expirará en 1 hora.
+
+        Si no solicitaste este cambio, ignora este email.
+
+        Gracias,
+        El equipo de MultiTiendas
+        '''
+        
+        send_mail(
+            subject,
+            message,
+            settings.DEFAULT_FROM_EMAIL,
+            [email],
+            fail_silently=False,
+        )
+        
+        return Response({'message': 'Se ha enviado un enlace de recuperación a tu email'})
+    
+    except User.DoesNotExist:
+        # ✅ No revelar si el email existe (seguridad)
+        return Response({'message': 'Si el email está registrado, recibirás un enlace de recuperación'})
+    except Exception as e:
+        logger.error(f"Error al enviar email: {str(e)}")
+        return Response({'error': 'Error al procesar la solicitud'}, status=500)
+
+
+# ✅ Verificar token y restablecer contraseña
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def password_reset_confirm(request, uidb64, token):
+    try:
+        # ✅ Decodificar UID
+        uid = force_str(urlsafe_base64_decode(uidb64))
+        user = User.objects.get(pk=uid)
+        
+        # ✅ Verificar token
+        if not password_reset_token.check_token(user, token):
+            return Response({'error': 'El enlace ha expirado o es inválido'}, status=400)
+        
+        # ✅ Actualizar contraseña
+        new_password = request.data.get('password')
+        if not new_password or len(new_password) < 6:
+            return Response({'error': 'La contraseña debe tener al menos 6 caracteres'}, status=400)
+        
+        user.set_password(new_password)
+        user.save()
+        
+        return Response({'message': 'Contraseña actualizada correctamente'})
+    
+    except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+        return Response({'error': 'El enlace es inválido'}, status=400)
+    except Exception as e:
+        logger.error(f"Error al restablecer contraseña: {str(e)}")
+        return Response({'error': 'Error al procesar la solicitud'}, status=500)    

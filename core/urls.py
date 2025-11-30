@@ -22,4 +22,8 @@ urlpatterns = [
     # Usuarios
     path('users/', views.listar_usuarios, name='listar_usuarios'),
     path('users/<int:pk>/', views.actualizar_usuario, name='actualizar_usuario'),
+
+    # recuperacion de password
+    path('password-reset/', views.password_reset_request, name='password_reset_request'),
+    path('password-reset/<uidb64>/<token>/', views.password_reset_confirm, name='password_reset_confirm'),    
 ]
