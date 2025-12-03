@@ -17,6 +17,7 @@ from django.urls import reverse
 from django.conf import settings
 import logging
 
+from django.contrib.auth.tokens import default_token_generator
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -484,10 +485,9 @@ def password_reset_request(request):
         uid = urlsafe_base64_encode(force_bytes(user.pk))
         
         # ✅ Construir URL de restablecimiento
-        reset_url = request.build_absolute_uri(
-            reverse('password_reset_confirm', kwargs={'uidb64': uid, 'token': token})
-        )
         
+        reset_url = f'http://127.0.0.1:5500/reset-password.html?uidb64={uid}&token={token}'
+
         # ✅ Enviar email
         subject = 'Recuperación de contraseña - MultiTiendas'
         message = f'''
@@ -525,19 +525,26 @@ def password_reset_request(request):
 
 
 # ✅ Verificar token y restablecer contraseña
-@api_view(['POST'])
+@api_view(['GET', 'POST'])
 @permission_classes([AllowAny])
 def password_reset_confirm(request, uidb64, token):
     try:
-        # ✅ Decodificar UID
         uid = force_str(urlsafe_base64_decode(uidb64))
         user = User.objects.get(pk=uid)
         
-        # ✅ Verificar token
-        if not password_reset_token.check_token(user, token):
+        # Verificar token
+        if not default_token_generator.check_token(user, token):
             return Response({'error': 'El enlace ha expirado o es inválido'}, status=400)
         
-        # ✅ Actualizar contraseña
+        # Si es GET: verificar y mostrar formulario
+        if request.method == 'GET':
+            return Response({
+                'message': 'Token válido. Puedes establecer una nueva contraseña.',
+                'uidb64': uidb64,
+                'token': token
+            })
+        
+        # Si es POST: actualizar contraseña
         new_password = request.data.get('password')
         if not new_password or len(new_password) < 6:
             return Response({'error': 'La contraseña debe tener al menos 6 caracteres'}, status=400)
@@ -551,4 +558,4 @@ def password_reset_confirm(request, uidb64, token):
         return Response({'error': 'El enlace es inválido'}, status=400)
     except Exception as e:
         logger.error(f"Error al restablecer contraseña: {str(e)}")
-        return Response({'error': 'Error al procesar la solicitud'}, status=500)    
+        return Response({'error': 'Error al procesar la solicitud'}, status=500)
