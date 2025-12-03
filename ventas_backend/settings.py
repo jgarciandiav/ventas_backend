@@ -4,6 +4,7 @@ Minimal version: Token auth + CORS (no JWT, no CSRF, no sessions for API)
 """
 
 from pathlib import Path
+from decouple import config
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -46,9 +47,9 @@ WSGI_APPLICATION = 'ventas_backend.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'ventas',
-        'USER': 'postgres',
-        'PASSWORD': 'Dragonxt1',  # ⚠️ cámbiala
+        'NAME': config('DB_NAME'),
+        'USER': config('DB_USER'),
+        'PASSWORD': config('DB_PASSWORD'),  # ⚠️ cámbiala
         'HOST': 'localhost',
         'PORT': '5432',
     }
@@ -106,7 +107,18 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:8080",
 ]
 
-
-
 # 👇 IMPORTANTE: Define tu modelo personalizado como usuario por defecto
 AUTH_USER_MODEL = 'core.User'
+
+
+# ✅ Configuración de email (usando Gmail como ejemplo)
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = config('MI_EMAIL')        # 👈 Tu email
+EMAIL_HOST_PASSWORD = config('ACCESS_KEY')  # 👈 Contraseña de App (no la de Gmail)
+DEFAULT_FROM_EMAIL = 'MultiTiendas <no-reply@multitiendas.com>'
+
+# ✅ Tokens expiran en 1 hora
+PASSWORD_RESET_TIMEOUT = 3600  # segundos
